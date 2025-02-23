@@ -26,7 +26,7 @@ static KEYWORDS: phf::Map<&'static str, Token> = phf::phf_map! {
     "load" => Token::Load,
 };
 
-fn try_get_keyword<'a>(s: impl AsRef<str>) -> Option<Token> {
+fn try_get_keyword(s: impl AsRef<str>) -> Option<Token> {
     KEYWORDS.get(s.as_ref()).cloned()
 }
 
@@ -47,11 +47,11 @@ fn is_ident_start_char(c: char) -> bool {
 }
 
 fn is_ident_char(c: char) -> bool {
-    c.is_alphabetic() || c.is_digit(10) || c == '_'
+    c.is_alphabetic() || c.is_ascii_digit() || c == '_'
 }
 
 fn is_num_char(c: char) -> bool {
-    c.is_digit(10)
+    c.is_ascii_digit()
 }
 
 impl<T: Iterator<Item = char>> Lexer<T> {
@@ -91,7 +91,7 @@ impl<T: Iterator<Item = char>> Lexer<T> {
             })
         } else {
             // TODO: Handle keywords (phf?)
-            Ok(try_get_keyword(&buffer).unwrap_or_else(move || Token::Identifier(buffer)))
+            Ok(try_get_keyword(&buffer).unwrap_or(Token::Identifier(buffer)))
         }
     }
 
@@ -148,6 +148,22 @@ impl<T: Iterator<Item = char>> Lexer<T> {
             Ok(Token::String(buffer))
         }
     }
+
+    fn try_read_next_symbol(&mut self) -> Result<Token> {
+        let c = self.input.next().ok_or_else(|| LexerError {
+            msg: "Expected symbol, got nothing".to_string(),
+        })?;
+
+        match c {
+            ',' => Ok(Token::Comma),
+            ';' => Ok(Token::Semicolon),
+            '(' => Ok(Token::OpenParen),
+            ')' => Ok(Token::CloseParen),
+            _ => Err(LexerError {
+                msg: format!("Unexpected symbol: {:?}", c),
+            }),
+        }
+    }
 }
 
 impl<T: Iterator<Item = char>> Iterator for Lexer<T> {
@@ -160,24 +176,30 @@ impl<T: Iterator<Item = char>> Iterator for Lexer<T> {
             Some(&c) if is_ident_start_char(c) => {
                 let token = self
                     .try_read_next_ident()
-                    .unwrap_or_else(|err| Token::Error(err));
+                    .unwrap_or_else(Token::Error);
                 Some(token)
             }
             // Lex numbers
             Some(&c) if is_num_char(c) => {
                 let token = self
                     .try_read_next_num()
-                    .unwrap_or_else(|err| Token::Error(err));
+                    .unwrap_or_else(Token::Error);
                 Some(token)
             }
             // Lex strings
-            Some(&c) if c == '"' => {
+            Some(&'"') => {
                 let token = self
                     .try_read_next_str()
-                    .unwrap_or_else(|err| Token::Error(err));
+                    .unwrap_or_else(Token::Error);
+                Some(token)
+            }, 
+            // Lex symbols and operators
+            Some(_) => {
+                let token = self
+                    .try_read_next_symbol()
+                    .unwrap_or_else(Token::Error);
                 Some(token)
             }
-            // TODO: Lex symbols and operators
             _ => None,
         }
     }
@@ -257,6 +279,27 @@ pub mod tests {
 
         let actual = lexer.next();
         assert_eq!(actual, Some(Token::String("baz".to_string())));
+
+        let actual = lexer.next();
+        assert_eq!(actual, None);
+    }
+
+    #[test]
+    fn it_lexes_symbols() {
+        let input = ", ; ( )";
+        let mut lexer = Lexer::new(input.chars());
+
+        let actual = lexer.next();
+        assert_eq!(actual, Some(Token::Comma));
+
+        let actual = lexer.next();
+        assert_eq!(actual, Some(Token::Semicolon));
+
+        let actual = lexer.next();
+        assert_eq!(actual, Some(Token::OpenParen));
+
+        let actual = lexer.next();
+        assert_eq!(actual, Some(Token::CloseParen));
 
         let actual = lexer.next();
         assert_eq!(actual, None);
